@@ -1,0 +1,63 @@
+---
+- name: Launch EC2 instances and configure ALB
+  hosts: localhost
+  tasks:
+    - name: Launch EC2 instances
+      ec2_instance:
+        instance_type: t2.micro
+        image_id: "ami-04b4f1a9cf54c11d0"
+        wait: yes
+        region: us-east-1
+        count: 2
+        tags:
+          Name: webserver
+      register: ec2_instances
+
+    - name: Create security group for ALB
+      ec2_group:
+        name: alb_sg
+        description: Security group for ALB
+        region: us-east-1
+        rules:
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+      register: alb_sg
+
+    - name: Create target group
+      elb_target_group:
+        name: webserver-tg
+        protocol: HTTP
+        port: 80
+        vpc_id: "{{ ec2_instances.instances[0].vpc_id }}"
+        health_check_protocol: HTTP
+        health_check_port: 80
+        health_check_path: /
+        region: us-east-1
+        state: present
+      register: target_group
+
+    - name: Register instances with target group
+      elb_target:
+        target_group_arn: "{{ target_group.target_group_arn }}"
+        target_id: "{{ item.instance_id }}"
+        state: present
+      with_items: "{{ ec2_instances.instances }}"
+
+    - name: Create ALB
+      elb_application_lb:
+        name: webserver-alb
+        state: present
+        subnets: 
+          - "{{ ec2_instances.instances[0].subnet_id }}"
+          - "subnet-01ac4e64d8efbc0dd"
+        security_groups: "{{ alb_sg.group_id }}"
+        region: us-east-1
+        listeners:
+         - Protocol: HTTP
+           Port: 80
+           DefaultActions:
+             - Type: forward
+               TargetGroupArn: "{{ target_group.target_group_arn }}"
+      register: alb
